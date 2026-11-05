@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """Keep the native titles of opened, local Codex threads in sync with model settings."""
 
-import fcntl
+import errno
 import json
 import os
 from pathlib import Path
+from queue import Empty, Queue
 import re
-import selectors
 import shutil
 import subprocess
 import sys
 import tempfile
+from threading import Thread
 import time
 import uuid
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 
 ICONS = {
@@ -103,18 +109,18 @@ class AppServer:
     def __init__(self, codex):
         self.proc = subprocess.Popen(
             [codex, "app-server", "--disable", "hooks"],
-            cwd="/",
+            cwd=Path.home().anchor,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            bufsize=0,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
-        self.reader = selectors.DefaultSelector()
-        self.reader.register(self.proc.stdout, selectors.EVENT_READ)
-        self.buffer = bytearray()
+        self.messages = Queue()
+        self.reader = Thread(target=self.read_messages, daemon=True)
+        self.reader.start()
         self.counter = 0
         try:
-            self.call("initialize", {"clientInfo": {"name": "codex_model_badges", "version": "0.1.0"}})
+            self.call("initialize", {"clientInfo": {"name": "codex_model_badges", "version": "0.2.0"}})
             self.send({"method": "initialized", "params": {}})
         except Exception:
             self.close()
@@ -122,6 +128,19 @@ class AppServer:
 
     def send(self, message):
         self.proc.stdin.write(json.dumps(message, ensure_ascii=True).encode() + b"\n")
+        self.proc.stdin.flush()
+
+    def read_messages(self):
+        try:
+            with self.proc.stdout as stream:
+                for line in stream:
+                    message = json.loads(line)
+                    if isinstance(message, dict) and "id" in message and "method" not in message:
+                        self.messages.put(message)
+        except (OSError, ValueError) as error:
+            self.messages.put(error)
+        finally:
+            self.messages.put(EOFError("local app-server closed"))
 
     def call(self, method, params):
         self.counter += 1
@@ -129,35 +148,32 @@ class AppServer:
         self.send({"id": request_id, "method": method, "params": params})
         deadline = time.monotonic() + 5
         while True:
-            while b"\n" in self.buffer:
-                line, _, self.buffer = self.buffer.partition(b"\n")
-                message = json.loads(line)
-                if message.get("id") != request_id:
-                    continue
-                if "error" in message:
-                    raise RpcError(message["error"].get("code"))
-                return message.get("result", {})
             remaining = deadline - time.monotonic()
-            if remaining <= 0 or not self.reader.select(remaining):
+            if remaining <= 0:
                 raise TimeoutError("local app-server response timed out")
-            chunk = os.read(self.proc.stdout.fileno(), 65536)
-            if not chunk:
-                raise EOFError("local app-server closed")
-            self.buffer.extend(chunk)
+            try:
+                message = self.messages.get(timeout=remaining)
+            except Empty:
+                raise TimeoutError("local app-server response timed out") from None
+            if isinstance(message, Exception):
+                raise message
+            if message.get("id") != request_id:
+                continue
+            if "error" in message:
+                raise RpcError(message["error"].get("code"))
+            return message.get("result", {})
 
     def close(self):
-        self.reader.close()
-        self.proc.stdin.close()
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
         try:
             self.proc.wait(timeout=1)
         except subprocess.TimeoutExpired:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait()
-        self.proc.stdout.close()
+            self.proc.kill()
+            self.proc.wait()
+        self.reader.join(timeout=1)
 
 
 class WatchedThread:
@@ -179,7 +195,10 @@ class WatchedThread:
         if current == self.fingerprint:
             return False
         previous_settings = self.settings
-        self.settings = rollout_settings(self.path)
+        try:
+            self.settings = rollout_settings(self.path)
+        except OSError:
+            return False
         self.fingerprint = current
         self.last_activity = now
         return self.settings != previous_settings
@@ -217,43 +236,88 @@ def is_thread_id(value):
 
 
 def codex_path():
+    if os.name == "nt":
+        native = shutil.which("codex.exe")
+        if native:
+            return native
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            bin_dir = Path(local_app_data) / "Programs" / "OpenAI" / "Codex" / "bin"
+            installed = shutil.which("codex", path=str(bin_dir))
+            if installed:
+                return installed
+        return shutil.which("codex")
     bundled = Path("/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
     return str(bundled) if os.access(bundled, os.X_OK) else shutil.which("codex")
 
 
-def watch(data, lock_fd):
+def try_watcher_lock(lock):
+    try:
+        if os.name == "nt":
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as error:
+        if error.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+            raise
+        return False
+    return True
+
+
+def registered_threads(data):
+    for entry in data.glob("*.watch"):
+        if not is_thread_id(entry.stem):
+            continue
+        try:
+            yield entry, entry.stat().st_mtime
+        except FileNotFoundError:
+            continue
+
+
+def watch(data):
     codex = codex_path()
     if not codex:
         return
+    installed_script = Path(__file__).resolve()
+    while installed_script.is_file():
+        with (data / "watch.lock").open("ab") as lock:
+            if not try_watcher_lock(lock):
+                return
+            watch_active_threads(data, codex, installed_script)
+        # A hook can register a thread while the old watcher is exiting and still owns the lock.
+        cutoff = time.time() - IDLE_EXPIRY
+        if not any(stamp >= cutoff for _, stamp in registered_threads(data)):
+            return
+
+
+def watch_active_threads(data, codex, installed_script):
     server = None
     threads = {}
-    installed_script = Path(__file__).resolve()
     try:
         while installed_script.is_file():
             now = time.time()
-            entries = list(data.glob("*.watch"))
-            if not entries:
-                return
             live = set()
-            for entry in entries:
+            for entry, stamp in registered_threads(data):
                 thread_id = entry.stem
-                if not is_thread_id(thread_id):
+                target = threads.setdefault(thread_id, WatchedThread(stamp))
+                target.last_activity = max(target.last_activity, stamp)
+                if now - target.last_activity > IDLE_EXPIRY:
+                    continue
+                live.add(thread_id)
+                try:
+                    registration = json.loads(entry.read_bytes())
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(registration, dict):
                     continue
                 try:
-                    stamp = entry.stat().st_mtime
-                    registration = json.loads(entry.read_text())
-                    target = threads.setdefault(thread_id, WatchedThread(stamp))
-                    target.last_activity = max(target.last_activity, stamp)
-                    if now - target.last_activity > IDLE_EXPIRY:
-                        continue
-                    live.add(thread_id)
                     if server is None:
                         server = AppServer(codex)
                     target.sync(server, thread_id, now, normalized_slug(registration.get("model")))
                 except RpcError:
                     # The first turn may not have materialized on disk yet.
-                    if thread_id in threads:
-                        threads[thread_id].next_read = now + POLL_SECONDS
+                    target.next_read = now + POLL_SECONDS
                 except (OSError, EOFError, ValueError):
                     if server:
                         server.close()
@@ -266,7 +330,21 @@ def watch(data, lock_fd):
     finally:
         if server:
             server.close()
-        os.close(lock_fd)
+
+
+def update_registration(entry, temp=None):
+    # Windows can briefly deny replacement or removal while the watcher has the file open.
+    for attempt in range(4):
+        try:
+            if temp is None:
+                entry.unlink(missing_ok=True)
+            else:
+                temp.replace(entry)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 3:
+                raise
+            time.sleep(0.05)
 
 
 def on_hook(data, event):
@@ -276,33 +354,34 @@ def on_hook(data, event):
     data.mkdir(mode=0o700, parents=True, exist_ok=True)
     entry = data / (thread_id + ".watch")
     if event.get("hook_event_name") == "SessionEnd":
-        entry.unlink(missing_ok=True)
+        update_registration(entry)
         return
     with tempfile.NamedTemporaryFile(dir=data, delete=False) as stream:
         temp = Path(stream.name)
         stream.write(json.dumps({"model": normalized_slug(event.get("model"))}).encode())
-    temp.replace(entry)
+    try:
+        update_registration(entry, temp)
+    finally:
+        temp.unlink(missing_ok=True)
     with (data / "watch.lock").open("ab") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        if not try_watcher_lock(lock):
             return
-        subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), "--watch", str(data), str(lock.fileno())],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            pass_fds=(lock.fileno(),),
-        )
+    options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+    subprocess.Popen(
+        [sys.executable, str(Path(__file__).resolve()), "--watch", str(data)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        **options,
+    )
 
 
 def main():
-    if len(sys.argv) == 4 and sys.argv[1] == "--watch":
-        watch(Path(sys.argv[2]), int(sys.argv[3]))
+    if len(sys.argv) == 3 and sys.argv[1] == "--watch":
+        watch(Path(sys.argv[2]))
     elif os.environ.get("PLUGIN_DATA"):
         try:
-            event = json.load(sys.stdin)
+            event = json.load(sys.stdin.buffer)
             if isinstance(event, dict):
                 on_hook(Path(os.environ["PLUGIN_DATA"]), event)
         except (OSError, ValueError):

@@ -1,0 +1,35 @@
+name: Model badges smoke test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the native Codex CLI
+        shell: pwsh
+        run: |
+          $toolDir = Join-Path $env:RUNNER_TEMP 'badges-tools'
+          npm install --ignore-scripts --no-audit --no-fund --prefix $toolDir @openai/codex@0.166.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $binaryName = if ($IsWindows) { 'codex.exe' } else { 'codex' }
+          $binary = Get-ChildItem (Join-Path $toolDir 'node_modules/@openai') -Recurse -File -Filter $binaryName |
+            Where-Object { $_.Directory.Name -eq 'bin' } | Select-Object -First 1
+          if (!$binary) { throw 'The native Codex binary was not installed.' }
+          $binary.Directory.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Verify title updates with the installed plugin
+        run: python -B tests/smoke.py

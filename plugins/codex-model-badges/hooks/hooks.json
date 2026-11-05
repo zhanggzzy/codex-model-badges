@@ -6,7 +6,8 @@
           {
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/hooks/codex_model_badges.py\"",
-            "timeout": 5
+            "timeout": 5,
+            "commandWindows": "py -3 \"$env:PLUGIN_ROOT/hooks/codex_model_badges.py\""
           }
         ]
       }
@@ -17,7 +18,8 @@
           {
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/hooks/codex_model_badges.py\"",
-            "timeout": 5
+            "timeout": 5,
+            "commandWindows": "py -3 \"$env:PLUGIN_ROOT/hooks/codex_model_badges.py\""
           }
         ]
       }
@@ -28,7 +30,8 @@
           {
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/hooks/codex_model_badges.py\"",
-            "timeout": 5
+            "timeout": 5,
+            "commandWindows": "py -3 \"$env:PLUGIN_ROOT/hooks/codex_model_badges.py\""
           }
         ]
       }
@@ -39,7 +42,8 @@
           {
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/hooks/codex_model_badges.py\"",
-            "timeout": 3
+            "timeout": 3,
+            "commandWindows": "py -3 \"$env:PLUGIN_ROOT/hooks/codex_model_badges.py\""
           }
         ]
       }

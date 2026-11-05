@@ -1,0 +1,12 @@
+{
+  "name": "local-model-badges",
+  "interface": { "displayName": "会话模型图标" },
+  "plugins": [
+    {
+      "name": "codex-model-badges",
+      "source": { "source": "local", "path": "./plugins/codex-model-badges" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

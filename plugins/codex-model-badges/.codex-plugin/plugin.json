@@ -1,0 +1,7 @@
+{
+  "name": "codex-model-badges",
+  "description": "自动给本地 Codex 会话标题添加模型与 Fast 图标。",
+  "hooks": "./hooks/hooks.json",
+  "requires_local_executor": true,
+  "interface": { "displayName": "会话模型图标" }
+}

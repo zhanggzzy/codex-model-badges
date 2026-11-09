@@ -65,4 +65,35 @@ codex plugin marketplace remove local-model-badges
 
 已保存的图标属于会话标题，可通过桌面端的重命名功能移除。
 
+## 本地跑 smoke
+
+需要与 CI 钉死的版本一致或同主线路径的 Codex CLI（当前为 `@openai/codex@0.166.0`，见 `.github/workflows/smoke.yml`），以及 Python 3.10+（CI 用 3.12）。
+
+测试会在临时目录里设置 `CODEX_HOME`，把本仓库当作 marketplace 装入插件，再通过本地 App Server 做标题断言；不会向模型发真实请求。
+
+```sh
+# macOS / Linux
+python -B tests/smoke.py
+
+# Windows（PowerShell / cmd）
+py -3 -B tests/smoke.py
+```
+
+若本机没有 `codex`，可先按 CI 同样方式安装到临时前缀，再把其 `bin` 目录加入 `PATH`：
+
+```sh
+npm install --ignore-scripts --no-audit --no-fund --prefix /tmp/badges-tools @openai/codex@0.166.0
+```
+
+## 发版清单
+
+1. 把 `plugins/codex-model-badges/hooks/codex_model_badges.py` 里硬编码的 `clientInfo.version` 改成与发版号一致（当前为 `0.2.0`）。
+2. 打 tag：`vX.Y.Z`（例如 `v0.2.0`）并推送，等 smoke CI 绿。
+3. 在 GitHub Release 上传插件 ZIP asset（历史命名如 `codex-model-badges-vX.Y.Z.zip`）。
+4. 提醒从 GitHub 安装的用户执行：`codex plugin marketplace upgrade local-model-badges`，再按需重装／重开桌面端并审阅 Hooks。ZIP 用户解压新版后更新源目录并重新安装。
+
+## 许可证
+
+MIT License · 见仓库根目录 [`LICENSE`](LICENSE)。
+
 [Codex Hooks](https://learn.chatgpt.com/docs/hooks) · [本地插件打包](https://developers.openai.com/plugins/build/plugins) · [Codex App Server](https://learn.chatgpt.com/docs/app-server)

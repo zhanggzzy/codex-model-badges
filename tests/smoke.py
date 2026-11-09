@@ -118,7 +118,7 @@ if __name__ == "__main__":
     cli = shutil.which("codex.exe" if os.name == "nt" else "codex") or shutil.which("codex")
     if not cli:
         raise SystemExit("Install a recent native Codex CLI before running this test.")
-    with tempfile.TemporaryDirectory(prefix="codex model badges ") as directory:
+    with tempfile.TemporaryDirectory(prefix="codex model badges ", ignore_cleanup_errors=True) as directory:
         scratch = Path(directory).resolve()
         codex_home = scratch / "codex"
         codex_home.mkdir()

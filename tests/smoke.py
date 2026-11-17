@@ -91,7 +91,7 @@ def smoke(codex, root):
                 wait_for(lambda: not lock_available(), "the installed hook did not start a watcher")
                 assert title() is None, "the watcher should wait for the native title"
 
-                original = "📌 示例会话"
+                original = "示例会话"
                 server.call("thread/name/set", {**thread_params, "name": original})
                 wait_for(lambda: title() == "☀️\u2009" + original, "the model badge did not appear")
                 print("PASS: the watcher prefixes the native title")
@@ -104,8 +104,22 @@ def smoke(codex, root):
                 wait_for(lambda: title() == "🌍\u2009" + original, "the new model did not update the title")
                 print("PASS: Fast on, Fast off, and model switching update the title without another message")
 
+                emoji_title = "✨ 【进行中】OCR架构设计"
+                server.call("thread/name/set", {**thread_params, "name": emoji_title})
+                server.call("thread/settings/update", {**thread_params, "model": "gpt-6-astra"})
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline:
+                    current = title()
+                    if current != emoji_title:
+                        raise AssertionError(
+                            "a native title that already starts with an emoji was prefixed: "
+                            + repr(current)
+                        )
+                    time.sleep(0.25)
+                print("PASS: a native title that already starts with an emoji is left unchanged")
+
                 run_hook("Stop")
-                assert title() == "🌍\u2009" + original
+                assert title() == emoji_title
             finally:
                 run_hook("SessionEnd")
                 wait_for(lock_available, "the watcher did not release its lock after session end")

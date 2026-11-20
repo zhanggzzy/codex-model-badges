@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Run title badge unit test
+        run: python -B tests/test_title_with_badge.py
       - name: Install the native Codex CLI
         shell: pwsh
         run: |

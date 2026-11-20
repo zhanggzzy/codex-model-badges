@@ -1,6 +1,6 @@
 # Codex Model Badges · 会话模型图标
 
-适用于 macOS 和原生 Windows 的 ChatGPT 桌面端里的**本地 Codex 会话**。插件等 Codex 生成标题，再把模型 emoji 加到标题前。切换模型、开启或关闭 Fast 后，如果当前客户端将设置写入本地会话，插件会更新同一段前缀。会话标题正文会保留。
+适用于 macOS 和原生 Windows 的 ChatGPT 桌面端里的**本地 Codex 会话**。插件等 Codex 生成标题，再把模型 emoji 加到标题前。切换模型、开启或关闭 Fast 后，如果当前客户端将设置写入本地会话，插件会更新同一段前缀。会话标题正文会保留。若标题本身已以 emoji 开头（不是本插件写入的模型前缀），则不再追加图标，以免叠出第二枚。
 
 例如同一个会话可以依次显示为：
 
@@ -69,7 +69,17 @@ codex plugin marketplace remove local-model-badges
 
 需要与 CI 钉死的版本一致或同主线路径的 Codex CLI（当前为 `@openai/codex@0.166.0`，见 `.github/workflows/smoke.yml`），以及 Python 3.10+（CI 用 3.12）。
 
-测试会在临时目录里设置 `CODEX_HOME`，把本仓库当作 marketplace 装入插件，再通过本地 App Server 做标题断言；不会向模型发真实请求。
+不依赖 Codex 的标题规则单测：
+
+```sh
+# macOS / Linux
+python -B tests/test_title_with_badge.py
+
+# Windows（PowerShell / cmd）
+py -3 -B tests/test_title_with_badge.py
+```
+
+完整 smoke 会在临时目录里设置 `CODEX_HOME`，把本仓库当作 marketplace 装入插件，再通过本地 App Server 做标题断言；不会向模型发真实请求。需要 Codex CLI：
 
 ```sh
 # macOS / Linux
